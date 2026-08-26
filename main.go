@@ -22,7 +22,7 @@ func main() {
 		serverAddr  string
 	)
 	flag.StringVar(&url, "url", "http://localhost:8080", "target URL")
-	flag.StringVar(&scenario, "scenario", "linear", "load scenario: linear or sine")
+	flag.StringVar(&scenario, "scenario", "linear", "load scenario: linear, sine or step")
 	flag.Var(&duration, "duration", "test duration, e.g. 60s, 2m")
 	flag.Float64Var(&minRPS, "min-rps", 10, "minimum requests per second")
 	flag.Float64Var(&maxRPS, "max-rps", 100, "maximum requests per second (linear target)")

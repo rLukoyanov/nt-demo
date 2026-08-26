@@ -90,6 +90,20 @@ func scheduler(cfg *Config) func(elapsed time.Duration) float64 {
 			return mid + amp*math.Sin(phase)
 		}
 	}
+	if cfg.Scenario == "step" {
+		period := cfg.WavePeriod
+		if period <= 0 {
+			period = cfg.Duration / 4
+		}
+		half := period / 2
+		return func(elapsed time.Duration) float64 {
+			// static MinRPS for the first half of the cycle, PeakRPS for the second.
+			if elapsed%period < half {
+				return cfg.MinRPS
+			}
+			return cfg.PeakRPS
+		}
+	}
 	// linear growth from MinRPS to MaxRPS over the whole duration.
 	return func(elapsed time.Duration) float64 {
 		frac := math.Min(1.0, elapsed.Seconds()/cfg.Duration.Seconds())
