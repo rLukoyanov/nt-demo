@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nt-demo — load tester</title>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #1a212b; --border: #2a3441;
+    --text: #e6edf3; --muted: #8b949e; --accent: #3fb950; --err: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, sans-serif;
+  }
+  header {
+    padding: 16px 24px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px;
+  }
+  header h1 { font-size: 18px; margin: 0; }
+  header .badge {
+    font-size: 12px; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 999px; padding: 2px 10px;
+  }
+  main { display: grid; grid-template-columns: 320px 1fr; gap: 20px; padding: 20px 24px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  h2 { font-size: 14px; margin: 0 0 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+  input, select {
+    width: 100%; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font: inherit;
+  }
+  .row { display: flex; gap: 10px; }
+  .row > div { flex: 1; }
+  button {
+    cursor: pointer; border: none; border-radius: 6px; padding: 10px 14px;
+    font: inherit; font-weight: 600;
+  }
+  #start { width: 100%; background: var(--accent); color: #052e12; margin-top: 16px; }
+  #start:disabled { opacity: .5; cursor: not-allowed; }
+  #cancel { background: var(--err); color: #fff; display: none; width: 100%; margin-top: 8px; }
+  #stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+  .stat { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  .stat .value { font-size: 22px; font-weight: 700; }
+  .stat .label { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  canvas { width: 100%; height: 260px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; }
+  #status { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  #error { color: var(--err); font-size: 12px; margin-top: 8px; display: none; }
+  #latency { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 16px; }
+  .lat-item .p { font-size: 12px; color: var(--muted); }
+  .lat-item .v { font-size: 18px; font-weight: 700; }
+  #latency:empty { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>nt-demo</h1>
+  <span class="badge" id="scenario-badge">—</span>
+</header>
+<main>
+  <div class="panel">
+    <h2>Настройка теста</h2>
+    <label for="url">URL</label>
+    <input id="url" value="http://localhost:8080" placeholder="http://api.example.com">
+
+    <label for="scenario">Сценарий</label>
+    <select id="scenario">
+      <option value="linear">linear — линейный рост</option>
+      <option value="sine">sine — волна с пиками</option>
+    </select>
+
+    <div class="row">
+      <div><label for="duration">Длительность</label><input id="duration" value="60s" placeholder="60s"></div>
+      <div><label for="period">Период (sine)</label><input id="period" value="30s" placeholder="30s"></div>
+    </div>
+
+    <div class="row">
+      <div><label for="minRps">Min RPS</label><input id="minRps" type="number" value="10"></div>
+      <div><label for="maxRps">Max RPS</label><input id="maxRps" type="number" value="100"></div>
+      <div><label for="peakRps">Peak RPS</label><input id="peakRps" type="number" value="200"></div>
+    </div>
+
+    <div class="row">
+      <div><label for="concurrency">Concurrency</label><input id="concurrency" type="number" value="50"></div>
+      <div><label for="timeout">Timeout</label><input id="timeout" value="5s" placeholder="5s"></div>
+    </div>
+
+    <button id="start">Запустить</button>
+    <button id="cancel">Остановить</button>
+    <div id="error"></div>
+  </div>
+
+  <div class="panel">
+    <div id="status">Готов к запуску.</div>
+    <div id="stats">
+      <div class="stat"><div class="value" id="elapsed">0s</div><div class="label">Время</div></div>
+      <div class="stat"><div class="value" id="rps">0</div><div class="label">RPS (ср.)</div></div>
+      <div class="stat"><div class="value" id="total">0</div><div class="label">Запросы</div></div>
+      <div class="stat"><div class="value" id="failures">0</div><div class="label">Ошибки</div></div>
+    </div>
+    <canvas id="chart"></canvas>
+    <div id="latency"></div>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+
+const state = {
+  runId: null,
+  es: null,
+  samples: [],       // {elapsed, rps}
+  finished: false,
+};
+
+const canvas = $('chart');
+const ctx = canvas.getContext('2d');
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function drawChart() {
+  resize();
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  ctx.clearRect(0, 0, w, h);
+
+  ctx.strokeStyle = '#2a3441';
+  ctx.beginPath();
+  ctx.moveTo(0, h - 20); ctx.lineTo(w, h - 20);
+  ctx.stroke();
+
+  if (state.samples.length < 2) return;
+
+  const maxRps = Math.max(...state.samples.map(s => s.rps), 1);
+  const maxT = state.samples[state.samples.length - 1].elapsed || 1;
+  const plotW = w, plotH = h - 24;
+
+  ctx.strokeStyle = '#3fb950';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  state.samples.forEach((s, i) => {
+    const x = (s.elapsed / maxT) * plotW;
+    const y = plotH - (s.rps / maxRps) * plotH;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // grid lines
+  ctx.strokeStyle = '#1f2937';
+  ctx.lineWidth = 1;
+  for (let i = 1; i < 4; i++) {
+    const y = (plotH / 4) * i;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+  }
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '11px system-ui';
+  ctx.fillText(Math.round(maxRps) + ' rps', 6, 14);
+}
+
+function fmtDur(s) {
+  const m = Math.floor(s / 60), sec = Math.round(s % 60);
+  return m > 0 ? m + 'm' + sec + 's' : sec + 's';
+}
+
+function updateLatency(lat) {
+  const box = $('latency');
+  box.innerHTML = '';
+  for (const p of ['p50', 'p90', 'p95', 'p99']) {
+    if (!lat || !lat[p]) continue;
+    const div = document.createElement('div');
+    div.className = 'lat-item';
+    div.innerHTML = '<div class="p">' + p + '</div><div class="v">' + lat[p] + '</div>';
+    box.appendChild(div);
+  }
+}
+
+function handleEvent(e) {
+  if (e.type === 'progress' || e.type === 'done') {
+    $('elapsed').textContent = fmtDur(e.elapsed);
+    $('rps').textContent = Math.round(e.rps);
+    $('total').textContent = e.total;
+    $('failures').textContent = e.failures;
+    state.samples.push({ elapsed: e.elapsed, rps: e.rps });
+    drawChart();
+  }
+  if (e.type === 'done') {
+    updateLatency(e.latency);
+    finishRun('Тест завершён.');
+  }
+}
+
+function finishRun(msg) {
+  state.finished = true;
+  if (state.es) { state.es.close(); state.es = null; }
+  state.runId = null;
+  $('start').disabled = false;
+  $('cancel').style.display = 'none';
+  $('status').textContent = msg;
+}
+
+function setRunning() {
+  state.finished = false;
+  state.samples = [];
+  updateLatency(null);
+  $('start').disabled = true;
+  $('cancel').style.display = 'block';
+  $('error').style.display = 'none';
+}
+
+function showError(msg) {
+  const el = $('error');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+$('start').addEventListener('click', async () => {
+  const payload = {
+    url: $('url').value.trim(),
+    scenario: $('scenario').value,
+    duration: $('duration').value.trim(),
+    minRps: parseFloat($('minRps').value),
+    maxRps: parseFloat($('maxRps').value),
+    peakRps: parseFloat($('peakRps').value),
+    period: $('period').value.trim() || undefined,
+    concurrency: parseInt($('concurrency').value),
+    timeout: $('timeout').value.trim() || undefined,
+  };
+  $('scenario-badge').textContent = payload.scenario;
+
+  try {
+    const res = await fetch('/api/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(txt);
+    }
+    const { id } = await res.json();
+    state.runId = id;
+    setRunning();
+    $('status').textContent = 'Тест запущен…';
+    state.es = new EventSource('/api/stream?id=' + id);
+    state.es.onmessage = ev => handleEvent(JSON.parse(ev.data));
+    state.es.onerror = () => {
+      if (!state.finished) $('status').textContent = 'Соединение с сервером потеряно.';
+    };
+  } catch (err) {
+    showError('Ошибка запуска: ' + err.message);
+    finishRun('Готов к запуску.');
+  }
+});
+
+$('cancel').addEventListener('click', async () => {
+  if (!state.runId) return;
+  await fetch('/api/run/' + state.runId + '/cancel', { method: 'POST' }).catch(() => {});
+  $('status').textContent = 'Останавливаю…';
+});
+
+window.addEventListener('resize', drawChart);
+drawChart();
+</script>
+</body>
+</html>

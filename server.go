@@ -1,0 +1,250 @@
+package main
+
+import (
+	"context"
+	"embed"
+	"encoding/json"
+	"fmt"
+	"io/fs"
+	"net/http"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+//go:embed static
+var staticFS embed.FS
+
+var runCounter atomic.Int64
+
+type runState struct {
+	id     string
+	cancel context.CancelFunc
+
+	mu   sync.Mutex
+	subs map[chan Event]struct{}
+}
+
+func (rs *runState) subscribe() chan Event {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	ch := make(chan Event, 64)
+	rs.subs[ch] = struct{}{}
+	return ch
+}
+
+func (rs *runState) unsubscribe(ch chan Event) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	delete(rs.subs, ch)
+	close(ch)
+}
+
+func (rs *runState) close() {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	for ch := range rs.subs {
+		delete(rs.subs, ch)
+		close(ch)
+	}
+}
+
+// runRequest is the JSON payload accepted by POST /api/run.
+type runRequest struct {
+	URL         string  `json:"url"`
+	Scenario    string  `json:"scenario"`
+	Duration    string  `json:"duration"`
+	MinRPS      float64 `json:"minRps"`
+	MaxRPS      float64 `json:"maxRps"`
+	PeakRPS     float64 `json:"peakRps"`
+	WavePeriod  string  `json:"period"`
+	Concurrency int     `json:"concurrency"`
+	Timeout     string  `json:"timeout"`
+}
+
+type server struct {
+	mu   sync.Mutex
+	runs map[string]*runState
+}
+
+func newServer() *server {
+	return &server{runs: map[string]*runState{}}
+}
+
+func (s *server) get(id string) *runState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runs[id]
+}
+
+func (s *server) handleRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req runRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	cfg, err := cfgFromRequest(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	id := fmt.Sprintf("%d", runCounter.Add(1))
+	ctx, cancel := context.WithCancel(context.Background())
+	rs := &runState{id: id, cancel: cancel, subs: map[chan Event]struct{}{}}
+
+	s.mu.Lock()
+	s.runs[id] = rs
+	s.mu.Unlock()
+
+	// remove run and close subscribers when finished.
+	go func() {
+		defer func() {
+			rs.cancel()
+			s.mu.Lock()
+			delete(s.runs, id)
+			s.mu.Unlock()
+			rs.close()
+		}()
+		if err := Run(ctx, cfg, rs.broadcast); err != nil {
+			// ignore; run errors are surfaced through events.
+		}
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"id": id})
+}
+
+func (rs *runState) broadcast(e Event) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	for ch := range rs.subs {
+		select {
+		case ch <- e:
+		default:
+			// subscriber is slow or gone; drop event.
+		}
+	}
+}
+
+func (s *server) handleCancel(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	rs := s.get(id)
+	if rs == nil {
+		http.Error(w, "run not found", http.StatusNotFound)
+		return
+	}
+	rs.cancel()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	rs := s.get(id)
+	if rs == nil {
+		http.Error(w, "run not found", http.StatusNotFound)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	sub := rs.subscribe()
+	defer rs.unsubscribe(sub)
+
+	ping := time.NewTicker(15 * time.Second)
+	defer ping.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ping.C:
+			if _, err := fmt.Fprintf(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		case e, ok := <-sub:
+			if !ok {
+				return
+			}
+			b, _ := json.Marshal(e)
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", b); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
+func cfgFromRequest(req runRequest) (*Config, error) {
+	dur, err := time.ParseDuration(req.Duration)
+	if err != nil {
+		return nil, fmt.Errorf("invalid duration: %v", err)
+	}
+	if dur <= 0 {
+		return nil, fmt.Errorf("duration must be positive")
+	}
+	if req.URL == "" {
+		return nil, fmt.Errorf("url is required")
+	}
+	if req.Scenario == "" {
+		req.Scenario = "linear"
+	}
+	if req.Concurrency <= 0 {
+		req.Concurrency = 50
+	}
+	var period, timeout time.Duration
+	if req.WavePeriod != "" {
+		period, err = time.ParseDuration(req.WavePeriod)
+		if err != nil {
+			return nil, fmt.Errorf("invalid period: %v", err)
+		}
+	}
+	if req.Timeout != "" {
+		timeout, err = time.ParseDuration(req.Timeout)
+		if err != nil {
+			return nil, fmt.Errorf("invalid timeout: %v", err)
+		}
+	}
+	return &Config{
+		URL:         req.URL,
+		Scenario:    req.Scenario,
+		Duration:    dur,
+		MinRPS:      req.MinRPS,
+		MaxRPS:      req.MaxRPS,
+		PeakRPS:     req.PeakRPS,
+		WavePeriod:  period,
+		Concurrency: req.Concurrency,
+		Timeout:     timeout,
+	}, nil
+}
+
+func startServer(addr string) error {
+	s := newServer()
+
+	staticDir, err := fs.Sub(staticFS, "static")
+	if err != nil {
+		return err
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("GET /", http.FileServer(http.FS(staticDir)))
+	mux.HandleFunc("POST /api/run", s.handleRun)
+	mux.HandleFunc("POST /api/run/{id}/cancel", s.handleCancel)
+	mux.HandleFunc("GET /api/stream", s.handleStream)
+
+	fmt.Printf("Web UI: http://%s\n", addr)
+	return http.ListenAndServe(addr, mux)
+}

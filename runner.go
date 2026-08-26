@@ -24,25 +24,32 @@ type Config struct {
 	Timeout     time.Duration
 }
 
+// Event is streamed to subscribers during a load test run.
+type Event struct {
+	Type     string            `json:"type"` // "start" | "progress" | "done"
+	Elapsed  float64           `json:"elapsed"`
+	Total    int64             `json:"total"`
+	Failures int64             `json:"failures"`
+	RPS      float64           `json:"rps"`
+	Latency  map[string]string `json:"latency,omitempty"`
+}
+
 // Stats aggregates request results.
 type Stats struct {
-	mu         sync.Mutex
-	total      int64
-	failures   int64
-	latencies  []time.Duration
-	start      time.Time
-	lastSample time.Time
+	mu        sync.Mutex
+	total     atomic.Int64
+	failures  atomic.Int64
+	latencies []time.Duration
 }
 
 func (s *Stats) add(latency time.Duration, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.total++
+	s.total.Add(1)
 	if err != nil {
-		s.failures++
+		s.failures.Add(1)
 	}
+	s.mu.Lock()
 	s.latencies = append(s.latencies, latency)
-	s.lastSample = time.Now()
+	s.mu.Unlock()
 }
 
 func (s *Stats) percentiles() map[string]time.Duration {
@@ -69,25 +76,6 @@ func (s *Stats) percentiles() map[string]time.Duration {
 	return res
 }
 
-func (s *Stats) report(done time.Duration) {
-	s.mu.Lock()
-	total, failures := s.total, s.failures
-	lat := s.latencies
-	s.mu.Unlock()
-	fmt.Printf("\n=== Results ===\n")
-	fmt.Printf("Duration:   %v\n", done.Round(time.Millisecond))
-	fmt.Printf("Requests:   %d\n", total)
-	fmt.Printf("Failures:   %d\n", failures)
-	if total > 0 {
-		fmt.Printf("RPS avg:    %.2f\n", float64(total)/done.Seconds())
-	}
-	if len(lat) > 0 {
-		percs := s.percentiles()
-		fmt.Printf("Latency     p50: %v  p90: %v  p95: %v  p99: %v\n",
-			percs["p50"], percs["p90"], percs["p95"], percs["p99"])
-	}
-}
-
 // scheduler computes the target RPS for a given elapsed time.
 func scheduler(cfg *Config) func(elapsed time.Duration) float64 {
 	if cfg.Scenario == "sine" {
@@ -109,10 +97,11 @@ func scheduler(cfg *Config) func(elapsed time.Duration) float64 {
 	}
 }
 
-// Run executes the load test according to cfg.
-func Run(cfg *Config) error {
+// Run executes the load test according to cfg, streaming events to onEvent.
+// onEvent may be nil. The test stops when ctx is canceled or duration elapses.
+func Run(ctx context.Context, cfg *Config, onEvent func(Event)) error {
 	client := &http.Client{Timeout: cfg.Timeout}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	workers := cfg.Concurrency
@@ -121,23 +110,35 @@ func Run(cfg *Config) error {
 	}
 
 	target := scheduler(cfg)
-	stats := &Stats{start: time.Now()}
+	stats := &Stats{}
 
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, workers)
+
+	emit := func(e Event) {
+		if onEvent != nil {
+			onEvent(e)
+		}
+	}
+
+	emit(Event{
+		Type:     "start",
+		Elapsed:  0,
+		Total:    0,
+		Failures: 0,
+		RPS:      target(0),
+	})
 
 	start := time.Now()
 	period := 100 * time.Millisecond
 	ticker := time.NewTicker(period)
 	defer ticker.Stop()
 
-	fmt.Printf("Starting %s scenario against %s for %v\n", cfg.Scenario, cfg.URL, cfg.Duration)
-	fmt.Printf("Workers: %d   MinRPS: %.1f   MaxRPS: %.1f   PeakRPS: %.1f\n",
-		workers, cfg.MinRPS, cfg.MaxRPS, cfg.PeakRPS)
-
-	// progress printer
+	// progress emitter
+	done := make(chan struct{})
 	go func() {
-		t := time.NewTicker(5 * time.Second)
+		defer close(done)
+		t := time.NewTicker(time.Second)
 		defer t.Stop()
 		for {
 			select {
@@ -145,9 +146,13 @@ func Run(cfg *Config) error {
 				return
 			case <-t.C:
 				el := time.Since(start)
-				rps := float64(atomic.LoadInt64(&stats.total)) / el.Seconds()
-				fmt.Printf("  elapsed %v  rps(avg) %.1f  failures %d\n",
-					el.Round(time.Second), rps, stats.failures)
+				emit(Event{
+					Type:     "progress",
+					Elapsed:  el.Seconds(),
+					Total:    stats.total.Load(),
+					Failures: stats.failures.Load(),
+					RPS:      float64(stats.total.Load()) / el.Seconds(),
+				})
 			}
 		}
 	}()
@@ -155,8 +160,22 @@ func Run(cfg *Config) error {
 	for {
 		select {
 		case <-ctx.Done():
+			<-done
 			wg.Wait()
-			stats.report(time.Since(start))
+			el := time.Since(start)
+			lat := stats.percentiles()
+			latStr := make(map[string]string, len(lat))
+			for k, v := range lat {
+				latStr[k] = v.String()
+			}
+			emit(Event{
+				Type:     "done",
+				Elapsed:  el.Seconds(),
+				Total:    stats.total.Load(),
+				Failures: stats.failures.Load(),
+				RPS:      float64(stats.total.Load()) / el.Seconds(),
+				Latency:  latStr,
+			})
 			return nil
 		case <-ticker.C:
 			elapsed := time.Since(start)
@@ -176,11 +195,8 @@ func Run(cfg *Config) error {
 						defer func() { <-sem }()
 						reqStart := time.Now()
 						resp, err := client.Get(cfg.URL)
-						var lat time.Duration
-						if err != nil {
-							lat = time.Since(reqStart)
-						} else {
-							lat = time.Since(reqStart)
+						lat := time.Since(reqStart)
+						if err == nil {
 							_ = resp.Body.Close()
 						}
 						stats.add(lat, err)

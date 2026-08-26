@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -18,6 +19,7 @@ func main() {
 		wavePeriod  durationFlag
 		concurrency int
 		timeout     durationFlag
+		serverAddr  string
 	)
 	flag.StringVar(&url, "url", "http://localhost:8080", "target URL")
 	flag.StringVar(&scenario, "scenario", "linear", "load scenario: linear or sine")
@@ -28,7 +30,16 @@ func main() {
 	flag.Var(&wavePeriod, "period", "sine wave period, e.g. 20s")
 	flag.IntVar(&concurrency, "concurrency", 50, "max concurrent HTTP clients")
 	flag.Var(&timeout, "timeout", "per-request timeout, e.g. 5s")
+	flag.StringVar(&serverAddr, "server", "", "run web UI server on this address, e.g. :8080")
 	flag.Parse()
+
+	if serverAddr != "" {
+		if err := startServer(serverAddr); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if duration <= 0 {
 		fmt.Fprintln(os.Stderr, "error: -duration is required, e.g. -duration 60s")
@@ -52,7 +63,29 @@ func main() {
 		Timeout:     time.Duration(timeout),
 	}
 
-	if err := Run(cfg); err != nil {
+	fmt.Printf("Starting %s scenario against %s for %v\n", cfg.Scenario, cfg.URL, cfg.Duration)
+	fmt.Printf("Workers: %d   MinRPS: %.1f   MaxRPS: %.1f   PeakRPS: %.1f\n",
+		concurrency, cfg.MinRPS, cfg.MaxRPS, cfg.PeakRPS)
+
+	if err := Run(context.Background(), cfg, func(e Event) {
+		switch e.Type {
+		case "progress":
+			fmt.Printf("  elapsed %v  rps(avg) %.1f  failures %d\n",
+				time.Duration(e.Elapsed*float64(time.Second)).Round(time.Second), e.RPS, e.Failures)
+		case "done":
+			fmt.Printf("\n=== Results ===\n")
+			fmt.Printf("Duration:   %v\n", time.Duration(e.Elapsed*float64(time.Second)).Round(time.Millisecond))
+			fmt.Printf("Requests:   %d\n", e.Total)
+			fmt.Printf("Failures:   %d\n", e.Failures)
+			if e.Total > 0 {
+				fmt.Printf("RPS avg:    %.2f\n", e.RPS)
+			}
+			if len(e.Latency) > 0 {
+				fmt.Printf("Latency     p50: %v  p90: %v  p95: %v  p99: %v\n",
+					e.Latency["p50"], e.Latency["p90"], e.Latency["p95"], e.Latency["p99"])
+			}
+		}
+	}); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}

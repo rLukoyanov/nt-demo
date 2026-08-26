@@ -13,4 +13,5 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates && adduser -D -u 10001 loader
 COPY --from=build /out/nt-demo /usr/local/bin/nt-demo
 USER loader
+EXPOSE 8080
 ENTRYPOINT ["nt-demo"]
