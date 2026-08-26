@@ -58,6 +58,8 @@ type runRequest struct {
 	MaxRPS      float64 `json:"maxRps"`
 	PeakRPS     float64 `json:"peakRps"`
 	WavePeriod  string  `json:"period"`
+	BaseTime    string  `json:"baseTime"`
+	PeakTime    string  `json:"peakTime"`
 	Concurrency int     `json:"concurrency"`
 	Timeout     string  `json:"timeout"`
 }
@@ -205,11 +207,23 @@ func cfgFromRequest(req runRequest) (*Config, error) {
 	if req.Concurrency <= 0 {
 		req.Concurrency = 50
 	}
-	var period, timeout time.Duration
+	var period, timeout, baseTime, peakTime time.Duration
 	if req.WavePeriod != "" {
 		period, err = time.ParseDuration(req.WavePeriod)
 		if err != nil {
 			return nil, fmt.Errorf("invalid period: %v", err)
+		}
+	}
+	if req.BaseTime != "" {
+		baseTime, err = time.ParseDuration(req.BaseTime)
+		if err != nil {
+			return nil, fmt.Errorf("invalid base-time: %v", err)
+		}
+	}
+	if req.PeakTime != "" {
+		peakTime, err = time.ParseDuration(req.PeakTime)
+		if err != nil {
+			return nil, fmt.Errorf("invalid peak-time: %v", err)
 		}
 	}
 	if req.Timeout != "" {
@@ -226,6 +240,8 @@ func cfgFromRequest(req runRequest) (*Config, error) {
 		MaxRPS:      req.MaxRPS,
 		PeakRPS:     req.PeakRPS,
 		WavePeriod:  period,
+		BaseTime:    baseTime,
+		PeakTime:    peakTime,
 		Concurrency: req.Concurrency,
 		Timeout:     timeout,
 	}, nil

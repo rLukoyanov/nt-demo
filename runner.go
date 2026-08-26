@@ -20,6 +20,8 @@ type Config struct {
 	MaxRPS      float64
 	PeakRPS     float64
 	WavePeriod  time.Duration
+	BaseTime    time.Duration
+	PeakTime    time.Duration
 	Concurrency int
 	Timeout     time.Duration
 }
@@ -91,14 +93,18 @@ func scheduler(cfg *Config) func(elapsed time.Duration) float64 {
 		}
 	}
 	if cfg.Scenario == "step" {
-		period := cfg.WavePeriod
-		if period <= 0 {
-			period = cfg.Duration / 4
+		base := cfg.BaseTime
+		peak := cfg.PeakTime
+		if base <= 0 {
+			base = cfg.WavePeriod / 2
 		}
-		half := period / 2
+		if peak <= 0 {
+			peak = cfg.WavePeriod / 2
+		}
+		cycle := base + peak
 		return func(elapsed time.Duration) float64 {
-			// static MinRPS for the first half of the cycle, PeakRPS for the second.
-			if elapsed%period < half {
+			// static MinRPS for BaseTime, then PeakRPS for PeakTime, repeating.
+			if elapsed%cycle < base {
 				return cfg.MinRPS
 			}
 			return cfg.PeakRPS
@@ -154,18 +160,24 @@ func Run(ctx context.Context, cfg *Config, onEvent func(Event)) error {
 		defer close(done)
 		t := time.NewTicker(time.Second)
 		defer t.Stop()
+		lastTotal := int64(0)
+		lastTime := time.Now()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				el := time.Since(start)
+				now := time.Now()
+				total := stats.total.Load()
+				instRPS := float64(total-lastTotal) / now.Sub(lastTime).Seconds()
+				lastTotal = total
+				lastTime = now
 				emit(Event{
 					Type:     "progress",
-					Elapsed:  el.Seconds(),
-					Total:    stats.total.Load(),
+					Elapsed:  now.Sub(start).Seconds(),
+					Total:    total,
 					Failures: stats.failures.Load(),
-					RPS:      float64(stats.total.Load()) / el.Seconds(),
+					RPS:      instRPS,
 				})
 			}
 		}

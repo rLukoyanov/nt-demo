@@ -17,6 +17,8 @@ func main() {
 		maxRPS      float64
 		peakRPS     float64
 		wavePeriod  durationFlag
+		baseTime    durationFlag
+		peakTime    durationFlag
 		concurrency int
 		timeout     durationFlag
 		serverAddr  string
@@ -26,8 +28,10 @@ func main() {
 	flag.Var(&duration, "duration", "test duration, e.g. 60s, 2m")
 	flag.Float64Var(&minRPS, "min-rps", 10, "minimum requests per second")
 	flag.Float64Var(&maxRPS, "max-rps", 100, "maximum requests per second (linear target)")
-	flag.Float64Var(&peakRPS, "peak-rps", 200, "peak requests per second (sine)")
+	flag.Float64Var(&peakRPS, "peak-rps", 200, "peak requests per second (sine/step)")
 	flag.Var(&wavePeriod, "period", "sine wave period, e.g. 20s")
+	flag.Var(&baseTime, "base-time", "step: static load duration per cycle, e.g. 6s")
+	flag.Var(&peakTime, "peak-time", "step: peak load duration per cycle, e.g. 3s")
 	flag.IntVar(&concurrency, "concurrency", 50, "max concurrent HTTP clients")
 	flag.Var(&timeout, "timeout", "per-request timeout, e.g. 5s")
 	flag.StringVar(&serverAddr, "server", "", "run web UI server on this address, e.g. :8080")
@@ -59,6 +63,8 @@ func main() {
 		MaxRPS:      maxRPS,
 		PeakRPS:     peakRPS,
 		WavePeriod:  time.Duration(wavePeriod),
+		BaseTime:    time.Duration(baseTime),
+		PeakTime:    time.Duration(peakTime),
 		Concurrency: concurrency,
 		Timeout:     time.Duration(timeout),
 	}
@@ -70,7 +76,7 @@ func main() {
 	if err := Run(context.Background(), cfg, func(e Event) {
 		switch e.Type {
 		case "progress":
-			fmt.Printf("  elapsed %v  rps(avg) %.1f  failures %d\n",
+			fmt.Printf("  elapsed %v  rps %.1f  failures %d\n",
 				time.Duration(e.Elapsed*float64(time.Second)).Round(time.Second), e.RPS, e.Failures)
 		case "done":
 			fmt.Printf("\n=== Results ===\n")

@@ -22,8 +22,10 @@
 Форма сигнала для `step`:
 
 - статика (`-min-rps`) — базовый уровень нагрузки;
-- скачок (`-peak-rps`) — нагрузка во второй половине цикла;
-- период (`-period`) — длительность полного цикла (статика и скачок по половине периода).
+- скачок (`-peak-rps`) — нагрузка во время пика;
+- `-base-time` — длительность статики в цикле;
+- `-peak-time` — длительность пика в цикле;
+- цикл повторяется: статика → пик → статика → пик …
 
 ## Использование
 
@@ -69,6 +71,13 @@ go build -o nt-demo .
 ```bash
 ./nt-demo -url http://api.example.com -scenario step -duration 5m \
   -min-rps 100 -peak-rps 300 -period 20s -concurrency 300
+```
+
+Статика 100 RPS с пиком 500 RPS: 6 секунд статики, 3 секунды пика, по кругу:
+
+```bash
+./nt-demo -url http://api.example.com -scenario step -duration 1m \
+  -min-rps 100 -peak-rps 500 -base-time 6s -peak-time 3s -concurrency 600
 ```
 
 ## Вывод

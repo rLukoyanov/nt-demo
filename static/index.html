@@ -73,7 +73,12 @@
 
     <div class="row">
       <div><label for="duration">Длительность</label><input id="duration" value="60s" placeholder="60s"></div>
-      <div><label for="period">Период (sine/step)</label><input id="period" value="30s" placeholder="30s"></div>
+      <div id="period-row"><label for="period">Период (sine)</label><input id="period" value="30s" placeholder="30s"></div>
+    </div>
+
+    <div class="row" id="step-times">
+      <div><label for="baseTime">База (step)</label><input id="baseTime" value="6s" placeholder="6s"></div>
+      <div><label for="peakTime">Пик (step)</label><input id="peakTime" value="3s" placeholder="3s"></div>
     </div>
 
     <div class="row">
@@ -96,7 +101,7 @@
     <div id="status">Готов к запуску.</div>
     <div id="stats">
       <div class="stat"><div class="value" id="elapsed">0s</div><div class="label">Время</div></div>
-      <div class="stat"><div class="value" id="rps">0</div><div class="label">RPS (ср.)</div></div>
+      <div class="stat"><div class="value" id="rps">0</div><div class="label">RPS</div></div>
       <div class="stat"><div class="value" id="total">0</div><div class="label">Запросы</div></div>
       <div class="stat"><div class="value" id="failures">0</div><div class="label">Ошибки</div></div>
     </div>
@@ -227,7 +232,9 @@ $('start').addEventListener('click', async () => {
     minRps: parseFloat($('minRps').value),
     maxRps: parseFloat($('maxRps').value),
     peakRps: parseFloat($('peakRps').value),
-    period: $('period').value.trim() || undefined,
+    period: $('scenario').value === 'sine' ? $('period').value.trim() || undefined : undefined,
+    baseTime: $('scenario').value === 'step' ? $('baseTime').value.trim() || undefined : undefined,
+    peakTime: $('scenario').value === 'step' ? $('peakTime').value.trim() || undefined : undefined,
     concurrency: parseInt($('concurrency').value),
     timeout: $('timeout').value.trim() || undefined,
   };
@@ -265,6 +272,12 @@ $('cancel').addEventListener('click', async () => {
 });
 
 window.addEventListener('resize', drawChart);
+$('scenario').addEventListener('change', () => {
+  const s = $('scenario').value;
+  $('period-row').style.display = s === 'sine' ? '' : 'none';
+  $('step-times').style.display = s === 'step' ? '' : 'none';
+});
+$('scenario').dispatchEvent(new Event('change'));
 drawChart();
 </script>
 </body>
