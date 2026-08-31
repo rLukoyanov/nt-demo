@@ -23,6 +23,7 @@ func main() {
 		timeout     durationFlag
 		serverAddr  string
 		workerAddr  string
+		election    bool
 	)
 	flag.StringVar(&url, "url", "http://localhost:8080", "target URL")
 	flag.StringVar(&scenario, "scenario", "linear", "load scenario: linear, sine or step")
@@ -37,7 +38,23 @@ func main() {
 	flag.Var(&timeout, "timeout", "per-request timeout, e.g. 5s")
 	flag.StringVar(&serverAddr, "server", "", "run web UI server on this address, e.g. :8080")
 	flag.StringVar(&workerAddr, "worker", "", "run as load worker on this address, e.g. :8081")
+	flag.BoolVar(&election, "election", false, "run leader-elected pod (worker on all pods, UI on the elected one)")
 	flag.Parse()
+
+	if election {
+		wa, sa := workerAddr, serverAddr
+		if wa == "" {
+			wa = ":8081"
+		}
+		if sa == "" {
+			sa = ":8080"
+		}
+		if err := runElected(context.Background(), wa, sa); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if serverAddr != "" {
 		if err := startServer(serverAddr); err != nil {

@@ -1,31 +1,43 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
-  name: controller
+  name: worker
   namespace: loadtest
 spec:
-  replicas: 1
+  serviceName: worker-headless
+  replicas: REPLICAS
   selector:
     matchLabels:
-      app: nt-demo-controller
+      app: nt-demo
   template:
     metadata:
       labels:
-        app: nt-demo-controller
+        app: nt-demo
+        role: worker
     spec:
+      serviceAccountName: nt-demo
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
         runAsGroup: 10001
         fsGroup: 10001
       containers:
-        - name: controller
+        - name: nt-demo
           image: ghcr.io/rLukoyanov/nt-demo:latest
           imagePullPolicy: Always
-          args: ["-server", ":8080"]
+          args: ["-election"]
           ports:
             - containerPort: 8080
+              name: ui
+            - containerPort: 8081
+              name: worker
           env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: LEASE_NAME
+              value: nt-demo-leader
             - name: WORKERS_SVC
               value: worker-headless
             - name: WORKERS_COUNT
@@ -36,27 +48,21 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8081
+            initialDelaySeconds: 2
+            periodSeconds: 5
           resources:
             requests:
-              cpu: 100m
+              cpu: 500m
               memory: 64Mi
             limits:
-              cpu: "1"
+              cpu: "2"
               memory: 256Mi
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: controller
-  namespace: loadtest
-spec:
-  selector:
-    app: nt-demo-controller
-  ports:
-    - port: 8080
-      targetPort: 8080

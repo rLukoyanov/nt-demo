@@ -304,11 +304,20 @@ func startWorker(addr string) error {
 }
 
 func serve(addr, label string) error {
+	h, err := newServerHandler()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s: http://%s\n", label, addr)
+	return http.ListenAndServe(addr, h)
+}
+
+func newServerHandler() (http.Handler, error) {
 	s := newServer()
 
 	staticDir, err := fs.Sub(staticFS, "static")
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	mux := http.NewServeMux()
@@ -317,7 +326,5 @@ func serve(addr, label string) error {
 	mux.HandleFunc("POST /api/run/{id}/cancel", s.handleCancel)
 	mux.HandleFunc("GET /api/stream", s.handleStream)
 	mux.HandleFunc("GET /api/pods", s.handlePods)
-
-	fmt.Printf("%s: http://%s\n", label, addr)
-	return http.ListenAndServe(addr, mux)
+	return mux, nil
 }
