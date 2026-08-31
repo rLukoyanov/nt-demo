@@ -80,6 +80,7 @@ func newServer() *server {
 // discoverPodsFromEnv builds the worker pod list for Kubernetes deployments.
 // WORKERS_COUNT + WORKERS_SVC (headless service) + WORKERS_PORT (+ optional
 // WORKERS_NAMESPACE) produce http://worker-<i>.<svc>.<ns>:<port> addresses.
+// The pod itself (POD_NAME) is excluded: the leader does not generate load.
 func discoverPodsFromEnv() []string {
 	count := os.Getenv("WORKERS_COUNT")
 	if count == "" {
@@ -98,9 +99,13 @@ func discoverPodsFromEnv() []string {
 		port = "8081"
 	}
 	ns := os.Getenv("WORKERS_NAMESPACE")
+	podName := os.Getenv("POD_NAME")
 
 	pods := make([]string, 0, n)
 	for i := 0; i < n; i++ {
+		if fmt.Sprintf("worker-%d", i) == podName {
+			continue
+		}
 		host := fmt.Sprintf("worker-%d.%s", i, svc)
 		if ns != "" {
 			host = fmt.Sprintf("worker-%d.%s.%s", i, svc, ns)

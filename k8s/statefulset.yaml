@@ -31,6 +31,8 @@ spec:
               name: ui
             - containerPort: 8081
               name: worker
+            - containerPort: 9090
+              name: health
           env:
             - name: POD_NAME
               valueFrom:
@@ -50,8 +52,8 @@ spec:
                   fieldPath: metadata.namespace
           readinessProbe:
             httpGet:
-              path: /
-              port: 8081
+              path: /healthz
+              port: 9090
             initialDelaySeconds: 2
             periodSeconds: 5
           resources:
