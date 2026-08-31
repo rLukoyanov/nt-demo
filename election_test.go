@@ -31,8 +31,9 @@ func newFakeKube() *fakeKube {
 func (f *fakeKube) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
+		isCollection := strings.HasSuffix(path, "/leases")
 		switch {
-		case strings.Contains(path, "/leases/") && r.Method == http.MethodGet:
+		case strings.Contains(path, "/leases") && r.Method == http.MethodGet:
 			f.mu.Lock()
 			defer f.mu.Unlock()
 			if f.lease == nil {
@@ -40,7 +41,7 @@ func (f *fakeKube) handler() http.Handler {
 				return
 			}
 			json.NewEncoder(w).Encode(f.lease)
-		case strings.Contains(path, "/leases/") && r.Method == http.MethodPost:
+		case isCollection && r.Method == http.MethodPost:
 			f.mu.Lock()
 			defer f.mu.Unlock()
 			if f.lease != nil {
@@ -172,4 +173,18 @@ func TestSetLabel(t *testing.T) {
 		t.Fatalf("expected role=leader, got %v", fk.labels)
 	}
 	fk.mu.Unlock()
+}
+
+func TestLeaderElectionNilNowUsesRealTime(t *testing.T) {
+	fk := newFakeKube()
+	srv := httptest.NewServer(fk.handler())
+	defer srv.Close()
+
+	// now unset -> must not panic and use real time.
+	le := &LeaderElector{client: testClient(srv), lease: "l", identity: "pod-a",
+		leaseDur: time.Hour, renew: time.Hour, retry: time.Hour}
+	ok, err := le.tryAcquireOrRenew()
+	if err != nil || !ok {
+		t.Fatalf("should acquire with default clock: ok=%v err=%v", ok, err)
+	}
 }

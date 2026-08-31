@@ -200,7 +200,7 @@ kubectl delete ns loadtest
 ## Docker
 
 Сборка мультиплатформенного образа (amd64 + arm64) и публикация в
-`ghcr.io/rLukoyanov/nt-demo` выполняются автоматически GitHub Actions
+`ghcr.io/rlukoyanov/nt-demo` выполняются автоматически GitHub Actions
 при пуше в `main` (тег `latest`) и при создании тегов `v*`.
 
 Локальная сборка:
@@ -215,8 +215,8 @@ docker run --rm -p 8080:8080 nt-demo -server :8080   # веб-интерфейс
 Запуск образа с GHCR на Linux-машине:
 
 ```bash
-docker pull ghcr.io/rLukoyanov/nt-demo:latest
-docker run --rm ghcr.io/rLukoyanov/nt-demo:latest \
+docker pull ghcr.io/rlukoyanov/nt-demo:latest
+docker run --rm ghcr.io/rlukoyanov/nt-demo:latest \
   -url http://api.example.com -scenario linear -duration 60s \
   -min-rps 10 -max-rps 200
 ```

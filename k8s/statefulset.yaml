@@ -23,7 +23,7 @@ spec:
         fsGroup: 10001
       containers:
         - name: nt-demo
-          image: ghcr.io/rLukoyanov/nt-demo:latest
+          image: ghcr.io/rlukoyanov/nt-demo:latest
           imagePullPolicy: Always
           args: ["-election"]
           ports:

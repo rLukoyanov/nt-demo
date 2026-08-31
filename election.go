@@ -128,17 +128,30 @@ type LeaderElector struct {
 	now      func() time.Time
 }
 
+func (le *LeaderElector) nowFunc() func() time.Time {
+	if le.now == nil {
+		return time.Now
+	}
+	return le.now
+}
+
 func (le *LeaderElector) leaseURL() string {
 	return fmt.Sprintf(leasePath, le.client.namespace, le.lease)
 }
 
+// leasesURL is the collection endpoint used to create a Lease (POST).
+func (le *LeaderElector) leasesURL() string {
+	return fmt.Sprintf("/apis/coordination.k8s.io/v1/namespaces/%s/leases", le.client.namespace)
+}
+
 // tryAcquireOrRenew returns true if this instance currently holds the lease.
 func (le *LeaderElector) tryAcquireOrRenew() (bool, error) {
-	return le.tryAcquireOrRenewAt(le.now())
+	return le.tryAcquireOrRenewAt(le.nowFunc()())
 }
 
 func (le *LeaderElector) tryAcquireOrRenewAt(at time.Time) (bool, error) {
-	now := at.UTC().Format("2006-01-02T15:04:05.000000000Z07:00")
+	// Kubernetes metav1.Time parses RFC3339 with up to 6 fractional digits.
+	now := at.UTC().Format("2006-01-02T15:04:05.000000Z07:00")
 	resp, err := le.client.do(http.MethodGet, le.leaseURL(), nil, "")
 	if err != nil {
 		return false, err
@@ -189,7 +202,7 @@ func (le *LeaderElector) createLease(now string) (bool, error) {
 			LeaderTransitions:    &trans,
 		},
 	})
-	resp, err := le.client.do(http.MethodPost, le.leaseURL(), body, "")
+	resp, err := le.client.do(http.MethodPost, le.leasesURL(), body, "")
 	if err != nil {
 		return false, err
 	}
