@@ -36,9 +36,11 @@ type Event struct {
 	Latency  map[string]string `json:"latency,omitempty"`
 }
 
-// Stats aggregates request results.
+// Stats aggregates request results. started counts fired requests, total
+// counts completed ones.
 type Stats struct {
 	mu        sync.Mutex
+	started   atomic.Int64
 	total     atomic.Int64
 	failures  atomic.Int64
 	latencies []time.Duration
@@ -154,13 +156,15 @@ func Run(ctx context.Context, cfg *Config, onEvent func(Event)) error {
 	ticker := time.NewTicker(period)
 	defer ticker.Stop()
 
-	// progress emitter
+	// progress emitter: instantaneous RPS is measured by requests STARTED, so
+	// the chart shows the constant generated load (flat plateaus) regardless of
+	// how unevenly the target completes them.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		t := time.NewTicker(time.Second)
 		defer t.Stop()
-		lastTotal := int64(0)
+		lastStarted := int64(0)
 		lastTime := time.Now()
 		for {
 			select {
@@ -168,14 +172,14 @@ func Run(ctx context.Context, cfg *Config, onEvent func(Event)) error {
 				return
 			case <-t.C:
 				now := time.Now()
-				total := stats.total.Load()
-				instRPS := float64(total-lastTotal) / now.Sub(lastTime).Seconds()
-				lastTotal = total
+				started := stats.started.Load()
+				instRPS := float64(started-lastStarted) / now.Sub(lastTime).Seconds()
+				lastStarted = started
 				lastTime = now
 				emit(Event{
 					Type:     "progress",
 					Elapsed:  now.Sub(start).Seconds(),
-					Total:    total,
+					Total:    started,
 					Failures: stats.failures.Load(),
 					RPS:      instRPS,
 				})
@@ -197,9 +201,9 @@ func Run(ctx context.Context, cfg *Config, onEvent func(Event)) error {
 			emit(Event{
 				Type:     "done",
 				Elapsed:  el.Seconds(),
-				Total:    stats.total.Load(),
+				Total:    stats.started.Load(),
 				Failures: stats.failures.Load(),
-				RPS:      float64(stats.total.Load()) / el.Seconds(),
+				RPS:      float64(stats.started.Load()) / el.Seconds(),
 				Latency:  latStr,
 			})
 			return nil
@@ -210,26 +214,29 @@ func Run(ctx context.Context, cfg *Config, onEvent func(Event)) error {
 				continue
 			}
 			rps := target(elapsed)
-			// number of requests to fire in this tick window.
+			// number of requests to fire in this tick window. Every request is
+			// queued (never skipped) so the generated load stays constant at the
+			// target even if the target is slow; concurrency caps in-flight work.
 			n := int(rps * period.Seconds())
 			for i := 0; i < n; i++ {
-				select {
-				case sem <- struct{}{}:
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
+				stats.started.Add(1)
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					select {
+					case sem <- struct{}{}:
 						defer func() { <-sem }()
-						reqStart := time.Now()
-						resp, err := client.Get(cfg.URL)
-						lat := time.Since(reqStart)
-						if err == nil {
-							_ = resp.Body.Close()
-						}
-						stats.add(lat, err)
-					}()
-				default:
-					// concurrency limit reached; skip request.
-				}
+					case <-ctx.Done():
+						return
+					}
+					reqStart := time.Now()
+					resp, err := client.Get(cfg.URL)
+					lat := time.Since(reqStart)
+					if err == nil {
+						_ = resp.Body.Close()
+					}
+					stats.add(lat, err)
+				}()
 			}
 		}
 	}
