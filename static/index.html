@@ -27,10 +27,11 @@
   .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
   h2 { font-size: 14px; margin: 0 0 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
   label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
-  input, select {
+  input, select, textarea {
     width: 100%; background: var(--bg); color: var(--text);
     border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font: inherit;
   }
+  textarea { resize: vertical; }
   .row { display: flex; gap: 10px; }
   .row > div { flex: 1; }
   button {
@@ -80,6 +81,9 @@
       <div><label for="baseTime">База (step)</label><input id="baseTime" value="6s" placeholder="6s"></div>
       <div><label for="peakTime">Пик (step)</label><input id="peakTime" value="3s" placeholder="3s"></div>
     </div>
+
+    <label for="pods">Поды (URL через запятую)</label>
+    <textarea id="pods" rows="2" placeholder="http://pod1:8081, http://pod2:8081"></textarea>
 
     <div class="row">
       <div><label for="minRps">Min RPS</label><input id="minRps" type="number" value="10"></div>
@@ -237,8 +241,9 @@ $('start').addEventListener('click', async () => {
     peakTime: $('scenario').value === 'step' ? $('peakTime').value.trim() || undefined : undefined,
     concurrency: parseInt($('concurrency').value),
     timeout: $('timeout').value.trim() || undefined,
+    pods: $('pods').value.split(',').map(s => s.trim()).filter(Boolean),
   };
-  $('scenario-badge').textContent = payload.scenario;
+  $('scenario-badge').textContent = payload.scenario + (payload.pods.length ? ' · ' + payload.pods.length + ' pod(s)' : '');
 
   try {
     const res = await fetch('/api/run', {
@@ -278,6 +283,11 @@ $('scenario').addEventListener('change', () => {
   $('step-times').style.display = s === 'step' ? '' : 'none';
 });
 $('scenario').dispatchEvent(new Event('change'));
+
+fetch('/api/pods').then(r => r.json()).then(({ pods }) => {
+  if (pods && pods.length) $('pods').value = pods.join(', ');
+}).catch(() => {});
+
 drawChart();
 </script>
 </body>

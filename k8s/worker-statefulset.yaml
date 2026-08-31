@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: workers
+  namespace: loadtest
+spec:
+  serviceName: worker-headless
+  replicas: REPLICAS
+  selector:
+    matchLabels:
+      app: nt-demo-worker
+  template:
+    metadata:
+      labels:
+        app: nt-demo-worker
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: worker
+          image: ghcr.io/rLukoyanov/nt-demo:latest
+          imagePullPolicy: Always
+          args: ["-worker", ":8081"]
+          ports:
+            - containerPort: 8081
+          resources:
+            requests:
+              cpu: 500m
+              memory: 64Mi
+            limits:
+              cpu: "2"
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

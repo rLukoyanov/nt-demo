@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller
+  namespace: loadtest
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nt-demo-controller
+  template:
+    metadata:
+      labels:
+        app: nt-demo-controller
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: controller
+          image: ghcr.io/rLukoyanov/nt-demo:latest
+          imagePullPolicy: Always
+          args: ["-server", ":8080"]
+          ports:
+            - containerPort: 8080
+          env:
+            - name: WORKERS_SVC
+              value: worker-headless
+            - name: WORKERS_COUNT
+              value: "WORKERS_COUNT_VALUE"
+            - name: WORKERS_PORT
+              value: "8081"
+            - name: WORKERS_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: controller
+  namespace: loadtest
+spec:
+  selector:
+    app: nt-demo-controller
+  ports:
+    - port: 8080
+      targetPort: 8080

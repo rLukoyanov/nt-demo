@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,26 +53,61 @@ func (rs *runState) close() {
 
 // runRequest is the JSON payload accepted by POST /api/run.
 type runRequest struct {
-	URL         string  `json:"url"`
-	Scenario    string  `json:"scenario"`
-	Duration    string  `json:"duration"`
-	MinRPS      float64 `json:"minRps"`
-	MaxRPS      float64 `json:"maxRps"`
-	PeakRPS     float64 `json:"peakRps"`
-	WavePeriod  string  `json:"period"`
-	BaseTime    string  `json:"baseTime"`
-	PeakTime    string  `json:"peakTime"`
-	Concurrency int     `json:"concurrency"`
-	Timeout     string  `json:"timeout"`
+	URL         string   `json:"url"`
+	Scenario    string   `json:"scenario"`
+	Duration    string   `json:"duration"`
+	MinRPS      float64  `json:"minRps"`
+	MaxRPS      float64  `json:"maxRps"`
+	PeakRPS     float64  `json:"peakRps"`
+	WavePeriod  string   `json:"period"`
+	BaseTime    string   `json:"baseTime"`
+	PeakTime    string   `json:"peakTime"`
+	Concurrency int      `json:"concurrency"`
+	Timeout     string   `json:"timeout"`
+	Pods        []string `json:"pods"`
 }
 
 type server struct {
 	mu   sync.Mutex
 	runs map[string]*runState
+	pods []string
 }
 
 func newServer() *server {
-	return &server{runs: map[string]*runState{}}
+	return &server{runs: map[string]*runState{}, pods: discoverPodsFromEnv()}
+}
+
+// discoverPodsFromEnv builds the worker pod list for Kubernetes deployments.
+// WORKERS_COUNT + WORKERS_SVC (headless service) + WORKERS_PORT (+ optional
+// WORKERS_NAMESPACE) produce http://worker-<i>.<svc>.<ns>:<port> addresses.
+func discoverPodsFromEnv() []string {
+	count := os.Getenv("WORKERS_COUNT")
+	if count == "" {
+		return nil
+	}
+	n, err := strconv.Atoi(count)
+	if err != nil || n <= 0 {
+		return nil
+	}
+	svc := os.Getenv("WORKERS_SVC")
+	if svc == "" {
+		return nil
+	}
+	port := os.Getenv("WORKERS_PORT")
+	if port == "" {
+		port = "8081"
+	}
+	ns := os.Getenv("WORKERS_NAMESPACE")
+
+	pods := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		host := fmt.Sprintf("worker-%d.%s", i, svc)
+		if ns != "" {
+			host = fmt.Sprintf("worker-%d.%s.%s", i, svc, ns)
+		}
+		pods = append(pods, "http://"+host+":"+port)
+	}
+	return pods
 }
 
 func (s *server) get(id string) *runState {
@@ -89,6 +126,12 @@ func (s *server) handleRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	if len(req.Pods) > 0 {
+		s.handleDistributedRun(w, req)
+		return
+	}
+
 	cfg, err := cfgFromRequest(req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -190,6 +233,11 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *server) handlePods(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string][]string{"pods": s.pods})
+}
+
 func cfgFromRequest(req runRequest) (*Config, error) {
 	dur, err := time.ParseDuration(req.Duration)
 	if err != nil {
@@ -248,6 +296,14 @@ func cfgFromRequest(req runRequest) (*Config, error) {
 }
 
 func startServer(addr string) error {
+	return serve(addr, "Web UI")
+}
+
+func startWorker(addr string) error {
+	return serve(addr, "Worker")
+}
+
+func serve(addr, label string) error {
 	s := newServer()
 
 	staticDir, err := fs.Sub(staticFS, "static")
@@ -260,7 +316,8 @@ func startServer(addr string) error {
 	mux.HandleFunc("POST /api/run", s.handleRun)
 	mux.HandleFunc("POST /api/run/{id}/cancel", s.handleCancel)
 	mux.HandleFunc("GET /api/stream", s.handleStream)
+	mux.HandleFunc("GET /api/pods", s.handlePods)
 
-	fmt.Printf("Web UI: http://%s\n", addr)
+	fmt.Printf("%s: http://%s\n", label, addr)
 	return http.ListenAndServe(addr, mux)
 }
