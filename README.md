@@ -199,6 +199,41 @@ kubectl -n loadtest port-forward svc/controller 8080:8080
 kubectl delete ns loadtest
 ```
 
+## k6 (распределённая нагрузка с пиками)
+
+В каталоге `k6/` лежит скрипт `deploy.sh`, который разворачивает
+[k6-operator](https://github.com/grafana/k6-operator) и запускает
+распределённый k6-тест с профилем «статика + пики»: база `BASE_RPS` с
+периодическими всплесками до `PEAK_RPS`, повторяется `CYCLES` раз. Нагрузка
+делится поровну между `PARALLELISM` подами (executor `ramping-arrival-rate`,
+открытая модель — плато ровные).
+
+```bash
+./k6/deploy.sh                                        # значения по умолчанию
+PEAK_RPS=1500 BASE_RPS=300 CYCLES=3 PARALLELISM=5 \
+  TARGET_URL=http://api:8080 ./k6/deploy.sh           # свой профиль
+./k6/deploy.sh --cleanup                              # удалить всё
+```
+
+Параметры (переменные окружения):
+
+| Переменная   | По умолчанию                             | Описание                    |
+| ------------ | ---------------------------------------- | --------------------------- |
+| `K6_NS`      | `k6`                                     | Namespace                   |
+| `TARGET_URL` | `http://target.default.svc.cluster.local:8080/` | Целевой URL   |
+| `BASE_RPS`   | `300`                                    | Статический уровень         |
+| `PEAK_RPS`   | `1500`                                   | Пиковый уровень             |
+| `BASE_TIME`  | `10s`                                    | Длительность статики        |
+| `PEAK_TIME`  | `8s`                                     | Длительность пика           |
+| `CYCLES`     | `2`                                      | Число циклов статика→пик    |
+| `PARALLELISM`| `3`                                      | Число k6-подов              |
+
+Скрипт: устанавливает k6-operator (Helm), генерирует `script.generated.js` и
+`peaks.generated.yaml`, создаёт ConfigMap и `TestRun`, ждёт завершения и
+печатает сводку по каждому поду. Установка требует Helm и доступа к
+`grafana.github.io` / `ghcr.io`. Файлы `k6/script.js` и `k6/peaks.yaml` —
+примеры для ручного запуска.
+
 ## Docker
 
 Сборка мультиплатформенного образа (amd64 + arm64) и публикация в

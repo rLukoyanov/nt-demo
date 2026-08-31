@@ -1,0 +1,6 @@
+# compiled binary
+/nt-demo
+
+# generated k6 artifacts
+/k6/script.generated.js
+/k6/peaks.generated.yaml

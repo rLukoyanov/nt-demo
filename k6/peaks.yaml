@@ -1,0 +1,11 @@
+apiVersion: k6.io/v1alpha1
+kind: TestRun
+metadata:
+  name: peaks-test
+  namespace: k6
+spec:
+  parallelism: 3
+  script:
+    configMap:
+      name: k6-script
+      file: script.js
