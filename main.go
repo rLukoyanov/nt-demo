@@ -22,6 +22,7 @@ func main() {
 		concurrency int
 		timeout     durationFlag
 		serverAddr  string
+		workerAddr  string
 	)
 	flag.StringVar(&url, "url", "http://localhost:8080", "target URL")
 	flag.StringVar(&scenario, "scenario", "linear", "load scenario: linear, sine or step")
@@ -35,10 +36,19 @@ func main() {
 	flag.IntVar(&concurrency, "concurrency", 50, "max concurrent HTTP clients")
 	flag.Var(&timeout, "timeout", "per-request timeout, e.g. 5s")
 	flag.StringVar(&serverAddr, "server", "", "run web UI server on this address, e.g. :8080")
+	flag.StringVar(&workerAddr, "worker", "", "run as load worker on this address, e.g. :8081")
 	flag.Parse()
 
 	if serverAddr != "" {
 		if err := startServer(serverAddr); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if workerAddr != "" {
+		if err := startWorker(workerAddr); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
